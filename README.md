@@ -22,7 +22,10 @@ CodeIsland 对 DSH 只内置了「来源标签」（`source: dsh`），**不会*
 插件要装进**你实际在跑的 profile**：
 
 ```bash
-# CLI profile（web / headless / 自建）
+# 未发布 npm 前，直接从 GitHub 源码装：
+dsh plugin --profile web add github:LeLiu/dsh-codeisland-bridge
+
+# CLI profile（web / headless / 自建，npm 发布后）
 dsh plugin --profile web add dsh-codeisland-bridge
 
 # 桌面端（DSH Desktop）的 profile 由应用独占，CLI 装不进去：
