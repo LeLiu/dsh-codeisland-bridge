@@ -1,0 +1,10 @@
+# Insert this plugin into a dsh profile's loader tree. Config defaults live in
+# index.js; override them from your own profile patch layer by id:
+#
+#   - id: codeisland-bridge
+#     config:
+#       socketPath: /tmp/codeisland-501.sock
+#       approvals: true
+- insert:
+    - id: codeisland-bridge
+      name: dsh-codeisland-bridge

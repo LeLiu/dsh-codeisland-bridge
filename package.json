@@ -1,0 +1,45 @@
+{
+  "name": "dsh-codeisland-bridge",
+  "version": "0.1.0",
+  "description": "Forward DeepSeek Harness agent activity (sessions, tools, approvals) to CodeIsland's notch over its Unix socket — no dsh-island, no extra panel.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "codeisland-socket.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "dsh",
+    "codeisland",
+    "notch",
+    "dynamic-island",
+    "agent-status"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LeLiu/dsh-codeisland-bridge.git"
+  },
+  "homepage": "https://github.com/LeLiu/dsh-codeisland-bridge#readme",
+  "bugs": {
+    "url": "https://github.com/LeLiu/dsh-codeisland-bridge/issues"
+  }
+}
