@@ -1,7 +1,9 @@
 import { strict as assert } from 'node:assert'
 import { after, test } from 'node:test'
-import { rmSync } from 'node:fs'
-import { apply, normalize, textOf } from '../index.js'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { apply, hostProcessFacts, normalize, textOf } from '../index.js'
 import { eventually, fakeContext, fakeIsland, testSocketPath } from './helpers.mjs'
 
 /** One test island shared by the cases below. */
@@ -159,4 +161,99 @@ test('normalize rejects bad config loudly', () => {
   assert.throws(() => normalize({ approvalTimeoutMs: -1 }), /approvalTimeoutMs/)
   assert.throws(() => normalize({ approvals: 'yes' }), /approvals/)
   assert.equal(normalize({}).source, 'dsh')
+})
+
+/** Run `fn` with the process facts CodeIsland reads overridden. */
+async function withDesktopHost(fn) {
+  const saved = {
+    bundle: process.env.__CFBundleIdentifier,
+    term: process.env.TERM_PROGRAM,
+    execPath: process.execPath,
+  }
+  process.env.__CFBundleIdentifier = 'com.deepseek.dsh'
+  delete process.env.TERM_PROGRAM
+  process.execPath = '/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness'
+  try {
+    return await fn()
+  } finally {
+    if (saved.bundle === undefined) delete process.env.__CFBundleIdentifier
+    else process.env.__CFBundleIdentifier = saved.bundle
+    if (saved.term === undefined) delete process.env.TERM_PROGRAM
+    else process.env.TERM_PROGRAM = saved.term
+    process.execPath = saved.execPath
+  }
+}
+
+test('payloads carry the hosting app so CodeIsland can raise it on click', async () => {
+  await withDesktopHost(async () => {
+    const harness = fixture()
+    const before = island.received.length
+    harness.listener('session/created')(session)
+    await eventually(() => island.received.length === before + 1)
+    const payload = island.received.at(-1)
+    assert.equal(payload._ppid, process.pid)
+    assert.equal(payload._term_bundle, 'com.deepseek.dsh')
+    harness.dispose()
+  })
+})
+
+test('terminal-hosted payloads keep CodeIsland\u2019s terminal jump', async () => {
+  const savedTerm = process.env.TERM_PROGRAM
+  const savedExec = process.execPath
+  process.env.TERM_PROGRAM = 'iTerm.app'
+  process.env.__CFBundleIdentifier = 'com.googlecode.iterm2'
+  process.execPath = '/opt/homebrew/bin/node'
+  try {
+    const harness = fixture()
+    const before = island.received.length
+    harness.listener('session/created')(session)
+    await eventually(() => island.received.length === before + 1)
+    const payload = island.received.at(-1)
+    assert.equal('_ppid' in payload, false)
+    assert.equal('_term_bundle' in payload, false)
+    harness.dispose()
+  } finally {
+    if (savedTerm === undefined) delete process.env.TERM_PROGRAM
+    else process.env.TERM_PROGRAM = savedTerm
+    process.execPath = savedExec
+  }
+})
+
+test('hostProcessFacts reports the desktop bundle and its pid', () => {
+  assert.deepEqual(
+    hostProcessFacts({
+      env: { __CFBundleIdentifier: 'com.deepseek.dsh' },
+      execPath: '/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness',
+    }),
+    { _ppid: process.pid, _term_bundle: 'com.deepseek.dsh' },
+  )
+})
+
+test('hostProcessFacts stays empty for a terminal CLI', () => {
+  assert.deepEqual(
+    hostProcessFacts({
+      env: { TERM_PROGRAM: 'iTerm.app', __CFBundleIdentifier: 'com.googlecode.iterm2' },
+      execPath: '/opt/homebrew/bin/node',
+    }),
+    {},
+  )
+  assert.deepEqual(hostProcessFacts({ env: {}, execPath: '/opt/homebrew/bin/node' }), {})
+})
+
+test('hostProcessFacts falls back to the app bundle Info.plist', () => {
+  const root = mkdtempSync(join(tmpdir(), 'fake-host-'))
+  const appPath = join(root, 'Fake Harness.app')
+  mkdirSync(join(appPath, 'Contents', 'MacOS'), { recursive: true })
+  writeFileSync(
+    join(appPath, 'Contents', 'Info.plist'),
+    '<plist><dict><key>CFBundleIdentifier</key><string>com.example.harness</string></dict></plist>',
+  )
+  try {
+    assert.deepEqual(
+      hostProcessFacts({ env: {}, execPath: join(appPath, 'Contents', 'MacOS', 'Fake Harness') }),
+      { _ppid: process.pid, _term_bundle: 'com.example.harness' },
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })

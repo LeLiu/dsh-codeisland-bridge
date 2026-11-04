@@ -14,8 +14,11 @@ CodeIsland 对 DSH 只内置了「来源标签」（`source: dsh`），**不会*
 | 最近回复 | `session/event`（assistant/message）→ `Stop.last_assistant_message` |
 | 等待授权 + 在刘海上点允许/拒绝 | `approval/request` → `PermissionRequest`，决策回写为 `allowed-once` / `rejected` |
 | 子代理 | `subagent/start|end` → `SubagentStart` / `SubagentStop` |
+| 点击卡片回到 DeepSeek Harness 窗口（桌面端） | payload 的 `_ppid` / `_term_bundle`（宿主 App 的 bundle id） |
 
-拿不到的：token 用量、完整 transcript、点击跳转到终端——这些 CodeIsland 只从各 CLI 的本地日志读，而 DSH 的会话日志是 zstd 压缩的，它没有对应 reader。
+拿不到的：token 用量、完整 transcript——这些 CodeIsland 只从各 CLI 的本地日志读，而 DSH 的会话日志是 zstd 压缩的，它没有对应 reader。
+
+点击跳转：DSH 运行在桌面 App 里时，插件把宿主进程和 App bundle 一起上报，CodeIsland 点击卡片会把 DeepSeek Harness 窗口拉到前台（而不是兜底拉起正在运行的终端）。DSH 桌面版没有「打开指定会话」的深链，所以只能定位到 App，不能保证切到卡片对应的那条会话；终端里跑的 CLI 会话不上报这些字段，仍走 CodeIsland 原有的终端跳转。
 
 ## 安装
 
@@ -40,6 +43,8 @@ dsh plugin --profile headless add /absolute/path/to/dsh-codeisland-bridge
 
 装完重启对应的 DSH 进程 / 应用。
 
+桌面端本地更新插件代码（例如改本仓库后重新打包成 file 依赖）时，不必重启 App：桌面 profile 的 `patchReload` 是 `live`，改一下 `~/.dsh/profiles/desktop/cordis.patch.yml` 里 `codeisland-bridge` 的配置就会重载该插件；之后可以用 `~/.codeisland/sessions.json` 里对应会话是否出现 `cliPid` / `termBundleId` 确认新代码已经生效。
+
 ## 配置
 
 所有字段都有默认值，全部可省：
@@ -62,13 +67,14 @@ dsh plugin --profile headless add /absolute/path/to/dsh-codeisland-bridge
 
 - **永不阻塞 agent**：所有非审批监听器都 `return next()`，发送是 fire-and-forget；CodeIsland 没开时静默跳过。
 - **审批不越权**：刘海返回 `allow`/`always` 才映射为 `allowed-once`，`deny` 映射为 `rejected`；超时、断线或 CodeIsland 未运行一律 `next()` 交还给其它 answerer，而不是在这里 fail-closed。
-- **代码即文档**：payload 字段就是 CodeIsland 的 hook 协议（`hook_event_name` / `session_id` / `cwd` / `tool_name` / `tool_use_id` / `_source`）。
+- **点击跳转只发事实**：进程在 `.app` 里运行且没有 `TERM_PROGRAM`（即被桌面 App 托管）时，payload 带 `_ppid`（当前进程 pid）与 `_term_bundle`（宿主 App bundle id）；终端里的 CLI 不带，避免 CodeIsland 把某个终端误当成会话宿主。
+- **代码即文档**：payload 字段就是 CodeIsland 的 hook 协议（`hook_event_name` / `session_id` / `cwd` / `tool_name` / `tool_use_id` / `_source`，桌面端另有 `_ppid` / `_term_bundle`）。
 - **隐私**：默认不发送 `tool_input`；`last_assistant_message` 只发本会话最后一条助手文本。
 
 ## 验证
 
 ```bash
-node --test test/*.test.mjs     # 18 个用例：payload 映射、审批决策、超时、无 island 降级
+node --test test/*.test.mjs     # 23 个用例：payload 映射、审批决策、超时、无 island 降级、宿主 App 跳转字段
 python3 -c "import json;print(json.load(open('$HOME/.codeisland/sessions.json'))[-1])"   # 跑一次会话后应出现 source: dsh
 ```
 

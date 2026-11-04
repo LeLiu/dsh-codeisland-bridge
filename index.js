@@ -10,8 +10,17 @@
  * fire-and-forget. Only `PermissionRequest` waits, because the answer feeds the
  * tool decision; when the island is absent or slow the request delegates to the
  * next answerer instead of failing closed here.
+ *
+ * Click-to-jump: CodeIsland resolves a card's jump target from the hook payload
+ * alone, never by reading DSH state. A session hosted by the DeepSeek Harness
+ * desktop app therefore reports the host process and its app bundle (`_ppid`,
+ * `_term_bundle`), so a click raises the Harness window instead of falling back
+ * to whichever terminal happens to be running. A CLI run from a terminal sends
+ * neither and keeps CodeIsland's normal terminal behaviour.
  * @module dsh-codeisland-bridge
  */
+
+import { readFileSync } from 'node:fs'
 
 import { CodeIslandSocket, parseDecision } from './codeisland-socket.js'
 
@@ -36,6 +45,48 @@ export const DEFAULTS = Object.freeze({
 })
 
 /**
+ * Process facts CodeIsland needs to route a click back to the surface that owns
+ * the conversation.
+ *
+ * CodeIsland resolves click-to-jump from the hook payload: `_ppid` is the
+ * process it watches and walks to find the GUI app hosting the agent, and
+ * `_term_bundle` is the surface a jump lands on (it also backs the "did the
+ * jump land" check). A DSH session that sends neither has no jump target, so a
+ * click falls back to raising whichever terminal happens to be running.
+ *
+ * Only a session hosted inside a desktop app's own bundle reports these: a
+ * terminal CLI's executable is the runtime, not an `app`, and the terminal sets
+ * `TERM_PROGRAM` for it. `__CFBundleIdentifier` is inherited from the app that
+ * launched the process; the bundle's Info.plist is the fallback when the
+ * variable is missing.
+ *
+ * @param {{ env?: Record<string, string | undefined>, execPath?: string }} [host] - Overrides for tests.
+ * @returns {Record<string, string | number>} Payload fields; empty for terminal-hosted runs.
+ */
+export function hostProcessFacts({ env = process.env, execPath = process.execPath } = {}) {
+  if (typeof env.TERM_PROGRAM === 'string' && env.TERM_PROGRAM !== '') return {}
+  const appPath = /^(.*?\.app)\/Contents\/MacOS\//.exec(execPath)?.[1]
+  if (appPath === undefined) return {}
+  const bundleId = env.__CFBundleIdentifier ?? bundleIdFromInfoPlist(appPath)
+  if (bundleId === undefined || bundleId === '') return {}
+  return { _ppid: process.pid, _term_bundle: bundleId }
+}
+
+/**
+ * The app's `CFBundleIdentifier` from its Info.plist.
+ * @param {string} appPath - Outermost `.app` directory.
+ * @returns {string | undefined}
+ */
+function bundleIdFromInfoPlist(appPath) {
+  try {
+    const plist = readFileSync(`${appPath}/Contents/Info.plist`, 'utf8')
+    return /<key>CFBundleIdentifier<\/key>\s*<string>([^<]+)<\/string>/.exec(plist)?.[1]
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * Register the plugin's listeners.
  * @param {import('@deepseek-ai/cordis').Context} ctx - Host context.
  * @param {Record<string, unknown>} [config] - Plugin config; unknown keys are ignored.
@@ -43,6 +94,8 @@ export const DEFAULTS = Object.freeze({
  */
 export function apply(ctx, config = {}) {
   const options = normalize(config)
+  // Resolved once per plugin load: the hosting app cannot change while running.
+  const hostFacts = hostProcessFacts()
   const client = new CodeIslandSocket({
     socketPath: options.socketPath,
     connectTimeoutMs: options.connectTimeoutMs,
@@ -78,6 +131,7 @@ export function apply(ctx, config = {}) {
     session_id: sessionId,
     cwd: sessions.get(sessionId)?.cwd ?? process.cwd(),
     _source: options.source,
+    ...hostFacts,
   })
 
   ctx.on('session/created', (session) => {
